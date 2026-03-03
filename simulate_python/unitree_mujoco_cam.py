@@ -66,12 +66,10 @@ def SimulationThread():
                 )
         mujoco.mj_step(mj_model, mj_data)
 
-        # print("LIDAR DATA: ", mj_data.sensor("lidar35").data.copy())  # Print first 10 lidar readings for debugging
-        print(
-        "LIDAR DATA:",
-        [mj_data.sensor(f"lidar{i:02d}").data.copy() for i in range(72)]
-           )  # Print all lidar readings for debugging
-
+        # print(
+        # "LIDAR DATA:",
+        # [mj_data.sensor(f"lidar{i:02d}").data.copy() for i in range(72)]
+        #    )  # Print all lidar readings for debugging
 
         locker.release()
 

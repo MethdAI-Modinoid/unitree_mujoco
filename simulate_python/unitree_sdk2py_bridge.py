@@ -3,15 +3,19 @@ import numpy as np
 import pygame
 import sys
 import struct
+import math
+import time
 
 from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelPublisher
 
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import WirelessController_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import AudioData_
+from unitree_sdk2py.idl.sensor_msgs.msg.dds_ import LaserScan_
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__SportModeState_
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__WirelessController_
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__AudioData_
+from unitree_sdk2py.idl.default import sensor_msgs_msg_dds__LaserScan_
 from unitree_sdk2py.utils.thread import RecurrentThread
 
 import config
@@ -30,6 +34,7 @@ TOPIC_HIGHSTATE = "rt/sportmodestate"
 TOPIC_WIRELESS_CONTROLLER = "rt/wirelesscontroller"
 TOPIC_CAMERA_RGB = "rt/camera/rgb"
 TOPIC_CAMERA_DEPTH = "rt/camera/depth"
+TOPIC_LIDAR_SCAN = "rt/lidar/scan"
 
 MOTOR_SENSOR_NUM = 3
 NUM_MOTOR_IDL_GO = 20
@@ -177,12 +182,36 @@ class UnitreeSdk2Bridge:
         self.dim_motor_sensor = MOTOR_SENSOR_NUM * self.num_motor
         self.have_imu = False
         self.have_frame_sensor = False
+        self.have_lidar = False
         self.dt = self.mj_model.opt.timestep
         self.idl_type = (self.num_motor > NUM_MOTOR_IDL_GO) # 0: unitree_go, 1: unitree_hg
 
         self.joystick = None
 
-        # Check sensor
+        # Discover lidar sensors and cache their sensordata addresses
+        self.lidar_sensors = []  # list of (sensor_id, name, sensordata_address)
+        for i in range(self.mj_model.nsensor):
+            name = mujoco.mj_id2name(
+                self.mj_model, mujoco._enums.mjtObj.mjOBJ_SENSOR, i
+            )
+            if name and name.startswith("lidar"):
+                addr = self.mj_model.sensor_adr[i]
+                self.lidar_sensors.append((i, name, addr))
+        self.lidar_sensors.sort(key=lambda x: x[1])  # angular order
+        self.num_lidar_rays = len(self.lidar_sensors)
+        self._lidar_addrs = [s[2] for s in self.lidar_sensors]
+
+        # Pre-compute LaserScan geometry (computed once)
+        if self.num_lidar_rays > 0:
+            self.have_lidar = True
+            self.lidar_angle_increment = 2.0 * math.pi / self.num_lidar_rays
+            self.lidar_angle_min = 0.0
+            self.lidar_angle_max = self.lidar_angle_min + self.lidar_angle_increment * (self.num_lidar_rays - 1)
+            self.lidar_range_min = 0.05
+            self.lidar_range_max = 50000.0
+            print(f"Discovered {self.num_lidar_rays} lidar sensors")
+
+        # Check other sensors (IMU, frame)
         for i in range(self.dim_motor_sensor, self.mj_model.nsensor):
             name = mujoco.mj_id2name(
                 self.mj_model, mujoco._enums.mjtObj.mjOBJ_SENSOR, i
@@ -192,6 +221,7 @@ class UnitreeSdk2Bridge:
             if name == "frame_pos":
                 self.have_frame_sensor_ = True
 
+                
         # Unitree sdk2 message
         self.low_state = LowState_default()
         self.low_state_puber = ChannelPublisher(TOPIC_LOWSTATE, LowState_)
@@ -220,6 +250,18 @@ class UnitreeSdk2Bridge:
             name="sim_wireless_controller",
         )
         self.WirelessControllerThread.Start()
+
+        self.lidar_scan = sensor_msgs_msg_dds__LaserScan_()
+        self.lidar_scan_puber = ChannelPublisher(
+            TOPIC_LIDAR_SCAN, LaserScan_
+        )
+        self.lidar_scan_puber.Init()
+        self.LidarScanThread = RecurrentThread(
+            interval=0.1,
+            target=self.PublishLidarScan,
+            name="sim_lidar_scan",
+        )
+        self.LidarScanThread.Start()
 
         # Setup camera publishers for streaming simulation camera data
         self.setup_camera_publishers()
@@ -435,6 +477,39 @@ class UnitreeSdk2Bridge:
 
             self.wireless_controller_puber.Write(self.wireless_controller)
 
+    def PublishLidarScan(self):
+        if self.mj_data is None or self.num_lidar_rays == 0:
+            return
+
+        # Read ranges from sensordata (negative means no hit)
+        raw_ranges = [float(self.mj_data.sensordata[a]) for a in self._lidar_addrs]
+
+        # Convert MuJoCo rangefinder output (-1 = no hit) to inf
+        clean_ranges = []
+        for d in raw_ranges:
+            if d < 0:
+                clean_ranges.append(float("inf"))
+            else:
+                clean_ranges.append(d)
+
+        # Populate LaserScan_ message
+        stamp_sec = time.time()
+        self.lidar_scan.header.stamp.sec = int(stamp_sec)
+        self.lidar_scan.header.stamp.nanosec = int((stamp_sec % 1) * 1e9)
+        self.lidar_scan.header.frame_id = "lidar_link"
+
+        self.lidar_scan.angle_min = self.lidar_angle_min
+        self.lidar_scan.angle_max = self.lidar_angle_max
+        self.lidar_scan.angle_increment = self.lidar_angle_increment
+        self.lidar_scan.time_increment = 0.0
+        self.lidar_scan.scan_time = float(self.dt)
+        self.lidar_scan.range_min = self.lidar_range_min
+        self.lidar_scan.range_max = self.lidar_range_max
+        self.lidar_scan.ranges = clean_ranges
+        self.lidar_scan.intensities = []  # not provided by MuJoCo rangefinder
+
+        self.lidar_scan_puber.Write(self.lidar_scan)
+    
     def SetupJoystick(self, device_id=0, js_type="xbox"):
         pygame.init()
         pygame.joystick.init()
