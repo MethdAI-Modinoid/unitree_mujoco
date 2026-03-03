@@ -16,6 +16,7 @@ mj_model = mujoco.MjModel.from_xml_path(config.ROBOT_SCENE)
 mj_data = mujoco.MjData(mj_model)
 
 
+
 if config.ENABLE_ELASTIC_BAND:
     elastic_band = ElasticBand()
     if config.ROBOT == "h1" or config.ROBOT == "g1":
@@ -51,7 +52,7 @@ def SimulationThread():
     target_camera_fps = 10.0
     # Calculate throttle: how many simulation steps per camera frame
     camera_throttle = max(1, int(1.0 / (target_camera_fps * mj_model.opt.timestep)))
-    print(f"✓ Camera throttling: rendering every {camera_throttle} simulation steps (~{target_camera_fps} FPS)")
+    # print(f"✓ Camera throttling: rendering every {camera_throttle} simulation steps (~{target_camera_fps} FPS)")
     
     while viewer.is_running():
         step_start = time.perf_counter()
@@ -66,10 +67,12 @@ def SimulationThread():
                 )
         mujoco.mj_step(mj_model, mj_data)
 
+        # print("LIDAR DATA: ", mj_data.sensor("lidar35").data.copy())  # Print first 10 lidar readings for debugging
         # print(
         # "LIDAR DATA:",
         # [mj_data.sensor(f"lidar{i:02d}").data.copy() for i in range(72)]
         #    )  # Print all lidar readings for debugging
+
 
         locker.release()
 

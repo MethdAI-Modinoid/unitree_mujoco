@@ -22,7 +22,11 @@ import config
 if config.ROBOT=="g1":
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
+    from unitree_sdk2py.idl.nav_msgs.msg.dds_ import Odometry_
+
     from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState_default
+    from unitree_sdk2py.idl.default import nav_msgs_msg_dds__Odometry_ as Odometry_default
 else:
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_
@@ -35,6 +39,7 @@ TOPIC_WIRELESS_CONTROLLER = "rt/wirelesscontroller"
 TOPIC_CAMERA_RGB = "rt/camera/rgb"
 TOPIC_CAMERA_DEPTH = "rt/camera/depth"
 TOPIC_LIDAR_SCAN = "rt/lidar/scan"
+TOPIC_ODOM = "rt/odom"
 
 MOTOR_SENSOR_NUM = 3
 NUM_MOTOR_IDL_GO = 20
@@ -221,8 +226,23 @@ class UnitreeSdk2Bridge:
             if name == "frame_pos":
                 self.have_frame_sensor_ = True
 
-                
+        # self.PrintSceneInformation()
+
         # Unitree sdk2 message
+
+        print("initting odom")
+
+        #################init odom###############        
+        self.odom = Odometry_default()
+        self.odom_puber = ChannelPublisher(TOPIC_ODOM, Odometry_)
+        self.odom_puber.Init()
+        self.odomthread = RecurrentThread(
+            interval=self.dt, target=self.PublishOdom, name="sim_odom"
+        )
+        self.odomthread.Start()
+        ##############################
+
+
         self.low_state = LowState_default()
         self.low_state_puber = ChannelPublisher(TOPIC_LOWSTATE, LowState_)
         self.low_state_puber.Init()
@@ -303,8 +323,50 @@ class UnitreeSdk2Bridge:
                     )
                 )
 
+
+    def PublishOdom(self):
+        if self.mj_data is not None:
+            import time as _time
+
+            # --- header ---
+            now = _time.time()
+            self.odom.header.stamp.sec = int(now)
+            self.odom.header.stamp.nanosec = int((now % 1) * 1e9)
+            self.odom.header.frame_id = "odom"
+            self.odom.child_frame_id = "base_link"
+
+            # --- position from frame_pos sensor (indices dim_motor_sensor + 10/11/12) ---
+            self.odom.pose.pose.position.x = self.mj_data.sensordata[self.dim_motor_sensor + 10]
+            self.odom.pose.pose.position.y = self.mj_data.sensordata[self.dim_motor_sensor + 11]
+            self.odom.pose.pose.position.z = self.mj_data.sensordata[self.dim_motor_sensor + 12]
+
+            # --- orientation from IMU quaternion (indices dim_motor_sensor + 0..3) ---
+            self.odom.pose.pose.orientation.w = self.mj_data.sensordata[self.dim_motor_sensor + 0]
+            self.odom.pose.pose.orientation.x = self.mj_data.sensordata[self.dim_motor_sensor + 1]
+            self.odom.pose.pose.orientation.y = self.mj_data.sensordata[self.dim_motor_sensor + 2]
+            self.odom.pose.pose.orientation.z = self.mj_data.sensordata[self.dim_motor_sensor + 3]
+
+            # --- linear velocity from frame_vel sensor (indices dim_motor_sensor + 13/14/15) ---
+            self.odom.twist.twist.linear.x = self.mj_data.sensordata[self.dim_motor_sensor + 13]
+            self.odom.twist.twist.linear.y = self.mj_data.sensordata[self.dim_motor_sensor + 14]
+            self.odom.twist.twist.linear.z = self.mj_data.sensordata[self.dim_motor_sensor + 15]
+
+            self.odom_puber.Write(self.odom)
+
+
+
     def PublishLowState(self):
         if self.mj_data != None:
+            # print("qpos:", self.mj_data.qpos)
+            # print("qvel:", self.mj_data.qvel)
+            # print("ctrl:", self.mj_data.ctrl)
+            # print("xpos:", self.mj_data.xpos)
+            # print("sensordata:", self.mj_data.sensordata)
+            # print("nq:", self.mj_model.nq)
+            # print("nv:", self.mj_model.nv)
+            # print("nu:", self.mj_model.nu)
+            # print("nbody:", self.mj_model.nbody)
+
             for i in range(self.num_motor):
                 self.low_state.motor_state[i].q = self.mj_data.sensordata[i]
                 self.low_state.motor_state[i].dq = self.mj_data.sensordata[
@@ -328,17 +390,6 @@ class UnitreeSdk2Bridge:
                 self.low_state.imu_state.quaternion[3] = self.mj_data.sensordata[
                     self.dim_motor_sensor + 3
                 ]
-
-                self.low_state.imu_state.gyroscope[0] = self.mj_data.sensordata[
-                    self.dim_motor_sensor + 4
-                ]
-                self.low_state.imu_state.gyroscope[1] = self.mj_data.sensordata[
-                    self.dim_motor_sensor + 5
-                ]
-                self.low_state.imu_state.gyroscope[2] = self.mj_data.sensordata[
-                    self.dim_motor_sensor + 6
-                ]
-
                 self.low_state.imu_state.accelerometer[0] = self.mj_data.sensordata[
                     self.dim_motor_sensor + 7
                 ]
@@ -348,6 +399,8 @@ class UnitreeSdk2Bridge:
                 self.low_state.imu_state.accelerometer[2] = self.mj_data.sensordata[
                     self.dim_motor_sensor + 9
                 ]
+                # print(self.mj_data.xpos[1])
+                # print(self.low_state.imu_state)
 
             if self.joystick != None:
                 pygame.event.get()

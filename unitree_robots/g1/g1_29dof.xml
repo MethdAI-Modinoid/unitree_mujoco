@@ -249,11 +249,11 @@
             <!-- ========== 360° LIDAR (rangefinder, horizontal plane) ========== -->
             <!-- Site Z-axis rotated to point forward (along X) via 90° pitch,
                  then replicated 360× by 1° yaw steps around Z -->
-            <replicate count="72" offset="0 0 0" euler="0.0872665 0 0">
+            <!-- <replicate count="72" offset="0 0 0" euler="0.0872665 0 0"> -->
               <replicate count="72" offset="0 0 0" euler="0 0 0.0872665">
                 <site name="rf" size="0.005" pos="0 0 0.70" euler="0 1.5708 0" rgba="1 0 0 0"/>
               </replicate>
-            </replicate>
+            <!-- </replicate> -->
 
             <body name="left_shoulder_pitch_link" pos="0.0039563 0.10022 0.23778"
               quat="0.990264 0.139201 1.38722e-05 -9.86868e-05">

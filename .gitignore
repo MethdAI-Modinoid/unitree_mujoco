@@ -3,3 +3,6 @@
 **/__pycache__/
 **/log/
 **/install/
+
+unitree_ros2/
+unitree_sdk2_python/
